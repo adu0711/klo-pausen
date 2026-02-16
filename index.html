@@ -438,6 +438,9 @@
       background-color: #e0860f;
     }
   </style>
+  <!-- Firebase SDKs -->
+  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-database.js"></script>
 </head>
 <body>
   <div class="container">
@@ -527,6 +530,22 @@
   </div>
 
   <script>
+    // Firebase Configuration
+    const firebaseConfig = {
+      apiKey: "AIzaSyCdXLjIhONQDaEoVaoZisRbkhCVVQnRar8",
+      authDomain: "klo-pausen.firebaseapp.com",
+      databaseURL: "https://klo-pausen-default-rtdb.europe-west1.firebasedatabase.app",
+      projectId: "klo-pausen",
+      storageBucket: "klo-pausen.firebasestorage.app",
+      messagingSenderId: "469822976846",
+      appId: "1:469822976846:web:047d74dab1f9426d31241f",
+      measurementId: "G-FQLGCPV0QF"
+    };
+
+    // Initialize Firebase
+    firebase.initializeApp(firebaseConfig);
+    const database = firebase.database();
+
     // Time slots configuration
     const timeSlots = [
       { id: 1, start: '07:45', end: '09:15' },
@@ -534,9 +553,6 @@
       { id: 3, start: '11:15', end: '12:45' },
       { id: 4, start: '13:15', end: '14:45' }
     ];
-
-    // Storage key
-    const STORAGE_KEY = 'klo-pausen-data';
 
     // DOM Elements
     const registrationForm = document.getElementById('registrationForm');
@@ -547,13 +563,7 @@
 
     // Initialize on page load
     document.addEventListener('DOMContentLoaded', () => {
-      loadAllSlots();
-      updateStats();
-      // Auto-refresh every 3 seconds
-      setInterval(() => {
-        loadAllSlots();
-        updateStats();
-      }, 3000);
+      setupRealtimeListener();
     });
 
     // Handle form submission
@@ -590,34 +600,32 @@
         return;
       }
 
-      // Get all schedules
-      const schedules = getAllSchedules();
+      // Check if already registered in this slot
+      database.ref(`slots/${timeSlotId}`).once('value', (snapshot) => {
+        const participants = snapshot.val() || {};
+        const exists = Object.values(participants).some(p => p.studentName === studentName && p.studentClass === studentClass);
+        
+        if (exists) {
+          showMessage('Du bist bereits in diesem Zeitfenster angemeldet', 'error');
+          return;
+        }
 
-      // Check if student already registered in this slot
-      if (schedules[timeSlotId]?.some(p => p.studentName === studentName && p.studentClass === studentClass)) {
-        showMessage('Du bist bereits in diesem Zeitfenster angemeldet', 'error');
-        return;
-      }
-
-      // Add new participant
-      if (!schedules[timeSlotId]) {
-        schedules[timeSlotId] = [];
-      }
-
-      schedules[timeSlotId].push({
-        id: Date.now(),
-        studentName,
-        studentClass,
-        startTime,
-        endTime,
-        timestamp: new Date().toISOString()
+        // Add new participant to Firebase
+        const participantId = Date.now().toString();
+        database.ref(`slots/${timeSlotId}/${participantId}`).set({
+          id: participantId,
+          studentName,
+          studentClass,
+          startTime,
+          endTime,
+          timestamp: new Date().toISOString()
+        }).then(() => {
+          showMessage('✓ Erfolgreich angemeldet! Deine Klo-Pause ist gebucht.', 'success');
+          registrationForm.reset();
+        }).catch((error) => {
+          showMessage('Fehler beim Speichern: ' + error.message, 'error');
+        });
       });
-
-      saveSchedules(schedules);
-      showMessage('✓ Erfolgreich angemeldet! Deine Klo-Pause ist gebucht.', 'success');
-      registrationForm.reset();
-      loadAllSlots();
-      updateStats();
     });
 
     // Update time range based on selected slot
@@ -642,22 +650,19 @@
       }, 4000);
     }
 
-    // Get all schedules from storage
-    function getAllSchedules() {
-      const data = localStorage.getItem(STORAGE_KEY);
-      return data ? JSON.parse(data) : {};
-    }
-
-    // Save schedules to storage
-    function saveSchedules(schedules) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(schedules));
+    // Setup real-time listener for database changes
+    function setupRealtimeListener() {
+      database.ref('slots').on('value', (snapshot) => {
+        const schedules = snapshot.val() || {};
+        displayAllSlots(schedules);
+        updateStats(schedules);
+      });
     }
 
     // Load and display all slots
-    function loadAllSlots() {
-      const schedules = getAllSchedules();
+    function displayAllSlots(schedules) {
       slotsContainer.innerHTML = timeSlots.map(slot => {
-        const participants = schedules[slot.id] || [];
+        const participants = schedules[slot.id] ? Object.values(schedules[slot.id]) : [];
         return createSlotCard(slot, participants);
       }).join('');
 
@@ -665,9 +670,17 @@
       document.querySelectorAll('.btn-remove').forEach(btn => {
         btn.addEventListener('click', (e) => {
           const slotId = parseInt(e.target.dataset.slotId);
-          const participantId = parseInt(e.target.dataset.participantId);
+          const participantId = e.target.dataset.participantId;
           removeParticipant(slotId, participantId);
         });
+      });
+    }
+
+    // Load all slots (for backward compatibility)
+    function loadAllSlots() {
+      database.ref('slots').once('value', (snapshot) => {
+        const schedules = snapshot.val() || {};
+        displayAllSlots(schedules);
       });
     }
 
@@ -708,12 +721,12 @@
     }
 
     // Update statistics
-    function updateStats() {
-      const schedules = getAllSchedules();
+    function updateStats(schedules) {
       let totalParticipants = 0;
       let filledSlots = 0;
 
-      Object.values(schedules).forEach(participants => {
+      Object.values(schedules).forEach(slotData => {
+        const participants = slotData ? Object.values(slotData) : [];
         totalParticipants += participants.length;
         if (participants.length > 0) filledSlots++;
       });
@@ -728,19 +741,11 @@
         return;
       }
 
-      const schedules = getAllSchedules();
-
-      if (schedules[slotId]) {
-        schedules[slotId] = schedules[slotId].filter(p => p.id !== participantId);
-        if (schedules[slotId].length === 0) {
-          delete schedules[slotId];
-        }
-      }
-
-      saveSchedules(schedules);
-      showMessage('✓ Abmeldung erfolgreich', 'success');
-      loadAllSlots();
-      updateStats();
+      database.ref(`slots/${slotId}/${participantId}`).remove().then(() => {
+        showMessage('✓ Abmeldung erfolgreich', 'success');
+      }).catch((error) => {
+        showMessage('Fehler beim Löschen: ' + error.message, 'error');
+      });
     }
 
     // Escape HTML
@@ -757,23 +762,25 @@
 
     // Export data as CSV
     function exportData() {
-      const schedules = getAllSchedules();
-      let csv = 'Zeitfenster,Uhrzeit,Name,Klasse,Anmeldungszeit\n';
+      database.ref('slots').once('value', (snapshot) => {
+        const schedules = snapshot.val() || {};
+        let csv = 'Zeitfenster,Uhrzeit,Name,Klasse,Anmeldungszeit\n';
 
-      timeSlots.forEach(slot => {
-        const participants = schedules[slot.id] || [];
-        if (participants.length === 0) {
-          csv += `Fenster ${slot.id},${slot.start}-${slot.end},Keine Anmeldungen,-,-\n`;
-        } else {
-          participants.forEach(p => {
-            const timestamp = new Date(p.timestamp).toLocaleString('de-DE');
-            csv += `Fenster ${slot.id},${slot.start}-${slot.end},"${p.studentName}","${p.studentClass}","${timestamp}"\n`;
-          });
-        }
+        timeSlots.forEach(slot => {
+          const participants = schedules[slot.id] ? Object.values(schedules[slot.id]) : [];
+          if (participants.length === 0) {
+            csv += `Fenster ${slot.id},${slot.start}-${slot.end},Keine Anmeldungen,-,-\n`;
+          } else {
+            participants.forEach(p => {
+              const timestamp = new Date(p.timestamp).toLocaleString('de-DE');
+              csv += `Fenster ${slot.id},${slot.start}-${slot.end},"${p.studentName}","${p.studentClass}","${timestamp}"\n`;
+            });
+          }
+        });
+
+        downloadCSV(csv, 'klo-pausen-export.csv');
+        showMessage('✓ Daten werden heruntergeladen', 'success');
       });
-
-      downloadCSV(csv, 'klo-pausen-export.csv');
-      showMessage('✓ Daten werden heruntergeladen', 'success');
     }
 
     // Download CSV file
@@ -788,10 +795,11 @@
     function clearAllData() {
       if (confirm('⚠️ Sollen wirklich ALLE Anmeldungen gelöscht werden? Dies kann nicht rückgängig gemacht werden!')) {
         if (confirm('Bist du dir WIRKLICH sicher? Diese Aktion kann nicht rückgängig gemacht werden!')) {
-          localStorage.removeItem(STORAGE_KEY);
-          loadAllSlots();
-          updateStats();
-          showMessage('✓ Alle Daten wurden gelöscht', 'success');
+          database.ref('slots').remove().then(() => {
+            showMessage('✓ Alle Daten wurden gelöscht', 'success');
+          }).catch((error) => {
+            showMessage('Fehler beim Löschen: ' + error.message, 'error');
+          });
         }
       }
     }
