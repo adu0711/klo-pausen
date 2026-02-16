@@ -479,13 +479,25 @@
 
           <div class="form-group">
             <label for="timeSlot">Zeitfenster:</label>
-            <select id="timeSlot" required>
+            <select id="timeSlot" required onchange="updateTimeRange()">
               <option value="">-- Zeitfenster auswählen --</option>
               <option value="1">07:45 - 09:15 Uhr</option>
               <option value="2">09:30 - 11:00 Uhr</option>
               <option value="3">11:15 - 12:45 Uhr</option>
               <option value="4">13:15 - 14:45 Uhr</option>
             </select>
+          </div>
+
+          <div class="form-group">
+            <label for="startTime">Deine Start-Zeit:</label>
+            <input type="time" id="startTime" required>
+            <small style="color: var(--text-light); margin-top: 4px; display: block;">z.B. 10:45</small>
+          </div>
+
+          <div class="form-group">
+            <label for="endTime">Deine End-Zeit:</label>
+            <input type="time" id="endTime" required>
+            <small style="color: var(--text-light); margin-top: 4px; display: block;">z.B. 10:55</small>
           </div>
 
           <button type="submit" class="btn-submit">Klo-Pause anmelden</button>
@@ -551,9 +563,30 @@
       const studentName = document.getElementById('studentName').value.trim();
       const studentClass = document.getElementById('studentClass').value.trim();
       const timeSlotId = parseInt(document.getElementById('timeSlot').value);
+      const startTime = document.getElementById('startTime').value;
+      const endTime = document.getElementById('endTime').value;
 
-      if (!studentName || !studentClass || !timeSlotId) {
+      if (!studentName || !studentClass || !timeSlotId || !startTime || !endTime) {
         showMessage('Bitte alle Felder ausfüllen', 'error');
+        return;
+      }
+
+      // Validate time range
+      if (startTime >= endTime) {
+        showMessage('End-Zeit muss nach Start-Zeit liegen', 'error');
+        return;
+      }
+
+      // Get time slot bounds
+      const slot = timeSlots.find(s => s.id === timeSlotId);
+      if (!slot) {
+        showMessage('Ungültiges Zeitfenster', 'error');
+        return;
+      }
+
+      // Validate times are within slot
+      if (startTime < slot.start || endTime > slot.end) {
+        showMessage(`Zeiten müssen zwischen ${slot.start} und ${slot.end} liegen`, 'error');
         return;
       }
 
@@ -575,6 +608,8 @@
         id: Date.now(),
         studentName,
         studentClass,
+        startTime,
+        endTime,
         timestamp: new Date().toISOString()
       });
 
@@ -584,6 +619,19 @@
       loadAllSlots();
       updateStats();
     });
+
+    // Update time range based on selected slot
+    function updateTimeRange() {
+      const timeSlotId = parseInt(document.getElementById('timeSlot').value);
+      const slot = timeSlots.find(s => s.id === timeSlotId);
+      
+      if (slot) {
+        document.getElementById('startTime').min = slot.start;
+        document.getElementById('startTime').max = slot.end;
+        document.getElementById('endTime').min = slot.start;
+        document.getElementById('endTime').max = slot.end;
+      }
+    }
 
     // Show message
     function showMessage(message, type) {
@@ -631,6 +679,9 @@
               <div class="participant-info">
                 <div class="participant-name">${escapeHtml(p.studentName)}</div>
                 <div class="participant-class">Klasse: ${escapeHtml(p.studentClass)}</div>
+                <div style="font-size: 0.80em; color: var(--secondary-color); margin-top: 4px; font-weight: 600;">
+                  ⏰ ${p.startTime} - ${p.endTime}
+                </div>
               </div>
               <button class="btn-remove" data-slot-id="${slot.id}" data-participant-id="${p.id}" title="Abmelden">✕</button>
             </li>
